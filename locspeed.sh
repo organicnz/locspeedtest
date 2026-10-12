@@ -4,7 +4,7 @@
 # Single-file, zero-dependency (curl/awk/netstat/ping only), bash 3.2 compatible.
 #
 # Local run:   bash locspeed.sh [--interval 2] [--once] [--json] [--no-color]
-# Remote run:  bash <(curl -fsSL https://raw.githubusercontent.com/organicnz/locspeedtest/v1.2.0/locspeed.sh)
+# Remote run:  bash <(curl -fsSL https://raw.githubusercontent.com/organicnz/locspeedtest/v1.3.0/locspeed.sh)
 # Pipe mode:   curl -fsSL .../locspeed.sh | bash -s -- --once
 #
 # No sudo, no writes outside ${TMPDIR:-/tmp}, HTTPS only.
@@ -13,7 +13,7 @@ set -euo pipefail
 IFS=$' \t\n'
 umask 022
 
-VERSION="1.0.0"
+VERSION="1.3.0"
 INTERVAL=2
 ONCE=0
 JSON=0
@@ -33,7 +33,7 @@ locspeed v${VERSION} — live connections + speed in your terminal
 
 Usage:
   bash locspeed.sh [options]
-  bash <(curl -fsSL https://raw.githubusercontent.com/organicnz/locspeedtest/v1.2.0/locspeed.sh) [options]
+  bash <(curl -fsSL https://raw.githubusercontent.com/organicnz/locspeedtest/v1.3.0/locspeed.sh) [options]
   curl -fsSL .../locspeed.sh | bash -s -- [options]
 
 Options:
