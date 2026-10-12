@@ -6,31 +6,61 @@ Live local-network connections + speed monitor in a single Bash file. No install
 
 ```bash
 # Option A — process substitution (recommended: keeps [t]/[q] keys working)
-bash <(curl -fsSL https://raw.githubusercontent.com/organicnz/locspeedtest/v1.3.0/locspeed.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/organicnz/locspeedtest/v1.4.0/locspeed.sh)
 
 # Option B — pipe (non-interactive, keys disabled, use flags)
-curl -fsSL https://raw.githubusercontent.com/organicnz/locspeedtest/v1.3.0/locspeed.sh | bash -s -- --once
+curl -fsSL https://raw.githubusercontent.com/organicnz/locspeedtest/v1.4.0/locspeed.sh | bash -s -- --once
 
 # Option C — clone
 git clone https://github.com/organicnz/locspeedtest.git && cd locspeedtest && bash locspeed.sh
 ```
 
-> Replace `USER` with the GitHub owner. Pin a tag (e.g. `v1.3.0`), never `main`, for anything you share.
+> Replace `USER` with the GitHub owner. Pin a tag (e.g. `v1.4.0`), never `main`, for anything you share.
 
 ### Verify before running (recommended for `curl | bash`)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/organicnz/locspeedtest/v1.3.0/locspeed.sh -o locspeed.sh
+curl -fsSL https://raw.githubusercontent.com/organicnz/locspeedtest/v1.4.0/locspeed.sh -o locspeed.sh
 shasum -a 256 locspeed.sh   # compare with SHA256SUMS in Releases
 bash locspeed.sh --once
 ```
 
 ## What it shows
 
-- **local** — interface, local IP, gateway, DNS, Wi-Fi SSID (or `(wired)`), public IP (cached 5 min in `$TMPDIR`, `offline` when unreachable)
-- **conns** — total / established / wait / listen TCP counts + top 5 remote talkers
-- **ping** — gateway, `1.1.1.1`, `8.8.8.8` per-refresh RTT with a 30-sample sparkline trend
-- **speed** — live down/up from per-interface byte counters every refresh; press `t` for a full 25 MB Cloudflare download probe
+Output is a bordered table that fits your terminal width (default 80, min 56) with automatic wrapping — nothing is ever truncated or misaligned:
+
+```
+┌─ locspeed v1.4.0  │  iface en0  │  11:34:23 ───────────────────────────────┐
+├─ SPEED ────────────────────────────────────────────────────────────────────┤
+│ down 469 Kb/s    up 286 Kb/s                                               │
+├─ LOCAL ────────────────────────────────────────────────────────────────────┤
+│ ip 10.0.0.194    gateway 10.0.0.1    dns 100.100.100.100                   │
+│ wifi — (wired)                                                             │
+├─ PUBLIC ───────────────────────────────────────────────────────────────────┤
+│ 203.0.113.42                                                               │
+├─ CONNECTIONS ──────────────────────────────────────────────────────────────┤
+│ total 129    established 85    time-wait 7    listen 36                    │
+│ · 22x 127.0.0.1    · 4x 172.65.90.22    · 4x 142.250.141.188               │
+│ · 3x 57.144.4.145    · 3x 172.67.142.245    · 3x 172.65.90.23              │
+├─ TOP PROCESSES ────────────────────────────────────────────────────────────┤
+│ PROCESS            DOWN       UP         SHARE                             │
+│ opencode           610 Kb/s   28.8 Mb/s  ██████████                        │
+│ Browser Helper     114 Kb/s   0 Kb/s     █░░░░░░░░░                        │
+│ mDNSResponder      34 Kb/s    5 Kb/s     ░░░░░░░░░░                        │
+│ IPNExtension       23 Kb/s    15 Kb/s    ░░░░░░░░░░                        │
+│ netbiosd           19 Kb/s    0 Kb/s     ░░░░░░░░░░                        │
+├─ PING ─────────────────────────────────────────────────────────────────────┤
+│ gateway 6.084 ms    1.1.1.1 18.315 ms    8.8.8.8 28.145 ms                 │
+│ trend ▁▁▂                                                                  │
+└── [t] speed test   [q] quit ───────────────────────────────────────────────┘
+```
+
+- **SPEED** — live down/up from per-interface byte counters every refresh, plus the last full-probe result
+- **LOCAL / PUBLIC** — interface, local IP, gateway, DNS, Wi-Fi SSID (or `(wired)`), public IP (cached 5 min in `$TMPDIR`, `offline` when unreachable)
+- **CONNECTIONS** — total / established / time-wait / listen TCP counts + top remote talkers
+- **TOP PROCESSES** — live per-process bandwidth with a relative share bar (macOS `nettop`; falls back to connection counts elsewhere)
+- **PING** — gateway, `1.1.1.1`, `8.8.8.8` per-refresh RTT with a 30-sample sparkline trend
+- Colors: green < 30 ms, yellow < 100 ms, red above; thresholds apply to RTT and process rates
 
 ## Options
 
@@ -41,6 +71,7 @@ bash locspeed.sh --once
 --json         one JSON snapshot, exit (for scripting)
 --no-color     disable ANSI colors (also honors NO_COLOR=1)
 --no-pubip     skip public-IP lookup (faster, offline-safe)
+--no-top       hide the TOP PROCESSES section
 -h, --help     help     -v, --version  version
 ```
 

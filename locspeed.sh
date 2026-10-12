@@ -4,7 +4,7 @@
 # Single-file, zero-dependency (curl/awk/netstat/ping only), bash 3.2 compatible.
 #
 # Local run:   bash locspeed.sh [--interval 2] [--once] [--json] [--no-color]
-# Remote run:  bash <(curl -fsSL https://raw.githubusercontent.com/organicnz/locspeedtest/v1.3.0/locspeed.sh)
+# Remote run:  bash <(curl -fsSL https://raw.githubusercontent.com/organicnz/locspeedtest/v1.4.0/locspeed.sh)
 # Pipe mode:   curl -fsSL .../locspeed.sh | bash -s -- --once
 #
 # No sudo, no writes outside ${TMPDIR:-/tmp}, HTTPS only.
@@ -13,7 +13,7 @@ set -euo pipefail
 IFS=$' \t\n'
 umask 022
 
-VERSION="1.3.0"
+VERSION="1.4.0"
 INTERVAL=2
 ONCE=0
 JSON=0
@@ -33,7 +33,7 @@ locspeed v${VERSION} — live connections + speed in your terminal
 
 Usage:
   bash locspeed.sh [options]
-  bash <(curl -fsSL https://raw.githubusercontent.com/organicnz/locspeedtest/v1.3.0/locspeed.sh) [options]
+  bash <(curl -fsSL https://raw.githubusercontent.com/organicnz/locspeedtest/v1.4.0/locspeed.sh) [options]
   curl -fsSL .../locspeed.sh | bash -s -- [options]
 
 Options:
@@ -222,12 +222,6 @@ tcp_counts() {
   echo "${t:-0} ${e:-0} ${w:-0} ${l:-0}"
 }
 
-top_hosts() {
-  netstat -an 2>/dev/null | grep -E '^tcp' | grep ESTABLISHED | awk '{print $5}' \
-    | sed 's/\.[0-9][0-9]*$//' | sort | uniq -c | sort -rn | head -5 \
-    | awk '{printf "      %4dx  %s\n", $1, $2}' || true
-}
-
 # Live per-process traffic rates via macOS nettop (cumulative counters diffed
 # across calls). Prints tab-separated "total name in_rps out_rps" top-5 lines.
 # Prints nothing on the first call (baseline only) or when idle. Always 0.
@@ -310,6 +304,81 @@ push_hist() { # push_hist "var" value maxlen — appends, trims from left
   eval "$var=\$cur"
 }
 
+# ---------------------------------------------------------------- table ui
+# Inner table width, derived from the terminal so borders always align.
+# ANSI escapes are zero-width, so every cell is built from its PLAIN text
+# length and colored afterwards — that is what keeps the columns straight.
+TW=78
+if [ -t 1 ]; then
+  _cols="$(tput cols 2>/dev/null || echo 80)"
+  case "$_cols" in ''|*[!0-9]*) _cols=80;; esac
+  [ "$_cols" -gt 78 ] && _cols=78
+  [ "$_cols" -lt 56 ] && _cols=56
+  TW=$((_cols - 2))
+  unset _cols
+fi
+
+fill_char() { # repeat $2 as char $1 times
+  printf "%-*s" "$1" "" | tr ' ' "$2"
+}
+
+padstr() { # left-justify $1 in $2 columns
+  printf "%-*s" "$2" "$1"
+}
+
+ttop() { # ttop PLAINTEXT COLOR
+  printf '┌─ %s%s%s %s┐\n' "$2" "$1" "$C_RST" "$(fill_char $(( TW - ${#1} - 5 )) '─')"
+}
+
+tline() {
+  printf '├%s┤\n' "$(fill_char "$TW" '─')"
+}
+
+tsec() { # tsec TITLE
+  printf '├─ %s%s %s┤\n' "$C_DIM$1$C_RST" "" "$(fill_char $(( TW - ${#1} - 5 )) '─')"
+}
+
+# Token row with automatic wrapping: each COLORED/PLAIN pair is kept whole and
+# moved to the next line when it would overflow, so nothing is ever truncated.
+# COLORED may contain ANSI escapes; PLAIN is its visible text (for width math).
+trowt() { # trowt COLORED PLAIN [COLORED PLAIN ...]
+  local avail=$(( TW - 3 ))
+  local -a cs=() ps=()
+  while [ $# -ge 2 ]; do
+    cs[${#cs[@]}]="$1"; ps[${#ps[@]}]="$2"; shift 2
+  done
+  local n=${#ps[@]} i l="" ll=0
+  for ((i=0; i<n; i++)); do
+    if [ $(( ll + ${#ps[i]} )) -gt "$avail" ] && [ "$ll" -gt 0 ]; then
+      printf '│ %s%*s│\n' "$l" "$(( avail - ll ))" ""
+      l=""; ll=0
+    fi
+    l="${l}${cs[i]:-${ps[i]}}"
+    ll=$(( ll + ${#ps[i]} ))
+  done
+  [ "$ll" -gt 0 ] && printf '│ %s%*s│\n' "$l" "$(( avail - ll ))" ""
+  return 0
+}
+
+# sep — a plain gap between tokens on a row
+SEP="    "
+
+tbot() { # tbot HINT (empty hint = solid bottom rule)
+  local h="$1"
+  if [ -z "$h" ]; then
+    printf '└%s┘\n' "$(fill_char $(( TW - 2 )) '─')"
+  else
+    printf '└── %s %s┘\n' "$h" "$(fill_char $(( TW - ${#h} - 6 )) '─')"
+  fi
+}
+
+# host_pairs "count<TAB>host" lines for the connections panel
+host_pairs() {
+  netstat -an 2>/dev/null | grep -E '^tcp' | grep ESTABLISHED | awk '{print $5}' \
+    | sed 's/\.[0-9][0-9]*$//' | sort | uniq -c | sort -rn | head -6 \
+    | awk -F' ' '{printf "%s\t%s\n", $1, $2}'
+}
+
 # Full download probe. Prints Mbps or "fail". TTY shows curl progress bar.
 speed_test_mbps() {
   ! has_cmd curl && { echo "fail (no curl)"; return; }
@@ -334,61 +403,113 @@ snapshot_human() { # args: iface lip gw dns wifi pubip counts down up ping_gw pi
   local topsample="${18:-}" topstate="${19:-live}"
   local top_total=0 pct=0 stotal="" sname="" sin="" sout=""
   local cg c1 c8 now
-
+  # top-process table columns (narrowed when the terminal is small)
+  local cn=18 cd=10 cu=10 cb=10
+  local cg c1 c8 now
   cg="$(color_for_ms "$pg")"; c1="$(color_for_ms "$p1")"; c8="$(color_for_ms "$p8")"
   now="$(date '+%H:%M:%S' 2>/dev/null || echo "??:??:??")"
 
-  # --- speed (moved to top) ---
-  printf "%s─ speed ─%s  down %s%s%s  up %s%s%s" \
-    "$C_DIM" "$C_RST" "$C_GRN" "$down" "$C_RST" "$C_GRN" "$up" "$C_RST"
+  # ---------- header ----------
+  ttop "locspeed v${VERSION}  │  iface ${ifx}  │  ${now}" "$C_BLD$C_CYN"
+
+  # ---------- speed ----------
+  tsec "SPEED"
   if [ -n "$lt" ] && [ "$lt" != "—" ]; then
-    printf "  full-test %s%s Mb/s%s" "$C_BLD" "$lt" "$C_RST"
+    trowt "${C_GRN}down ${down}${C_RST}" "down ${down}" "" "$SEP" \
+          "${C_GRN}up ${up}${C_RST}" "up ${up}" "" "$SEP" \
+          "${C_BLD}full-test ${lt} Mb/s${C_RST}" "full-test ${lt} Mb/s"
+  else
+    trowt "${C_GRN}down ${down}${C_RST}" "down ${down}" "" "$SEP" \
+          "${C_GRN}up ${up}${C_RST}" "up ${up}"
   fi
-  printf "\n"
 
-  # --- version + iface ---
-  printf "%s%s locspeed v%s %s│%s %s %s│%s iface %s%s\n" \
-    "$C_BLD" "$C_CYN" "$VERSION" "$C_DIM" "$C_RST$C_DIM" "$now" "$C_DIM" "$C_RST$C_BLD" "$ifx" "$C_RST"
-  printf "%s─ local ─%s  ip %s%s%s  gw %s  dns %s  wifi %s%s%s\n" \
-    "$C_DIM" "$C_RST" "$C_BLD" "$lip" "$C_RST" "$gw" "$dns" "$C_DIM" "$wifi" "$C_RST"
-  printf "%s─ public ─%s  %s%s%s\n" "$C_DIM" "$C_RST" "$C_BLU" "$pub" "$C_RST"
+  # ---------- local ----------
+  tsec "LOCAL"
+  trowt "${C_DIM}ip${C_RST} ${lip}" "ip ${lip}" "" "$SEP" \
+        "${C_DIM}gateway${C_RST} ${gw}" "gateway ${gw}" "" "$SEP" \
+        "${C_DIM}dns${C_RST} ${dns}" "dns ${dns}"
+  trowt "${C_DIM}wifi${C_RST} ${wifi}" "wifi ${wifi}"
+  tsec "PUBLIC"
+  trowt "${C_BLU}${pub}${C_RST}" "$pub"
 
-  # --- conns ---
-  printf "%s─ conns ─%s  total %s%d%s  estab %s%d%s  wait %d  listen %d\n" \
-    "$C_DIM" "$C_RST" "$C_BLD" "$t" "$C_RST" "$C_GRN" "$e" "$C_RST" "$w" "$l"
-  printf "%s  top talkers:%s\n" "$C_DIM" "$C_RST"
-  top_hosts
+  # ---------- connections ----------
+  tsec "CONNECTIONS"
+  trowt "${C_DIM}total${C_RST} ${C_BLD}${t}${C_RST}" "total ${t}" "" "$SEP" \
+        "${C_DIM}established${C_RST} ${C_GRN}${e}${C_RST}" "established ${e}" "" "$SEP" \
+        "${C_DIM}time-wait${C_RST} ${w}" "time-wait ${w}" "" "$SEP" \
+        "${C_DIM}listen${C_RST} ${l}" "listen ${l}"
+  local -a htoks=()
+  while IFS=$'\t' read -r hc ha; do
+    [ -z "${ha:-}" ] && continue
+    htoks[${#htoks[@]}]="${C_DIM}· ${hc}x ${ha}${C_RST}"
+    htoks[${#htoks[@]}]="· ${hc}x ${ha}"
+    htoks[${#htoks[@]}]=""
+    htoks[${#htoks[@]}]="$SEP"
+  done < <(host_pairs)
+  if [ ${#htoks[@]} -gt 0 ]; then
+    unset "htoks[${#htoks[@]}-1]"
+    trowt "${htoks[@]}"
+  fi
+
+  # ---------- top processes ----------
   if [ "$NO_TOP" = "0" ]; then
-    if [ "$topstate" = "fallback" ]; then
-      printf "%s─ top ─%s  %sby connections (no per-process counters on this OS)%s\n" "$C_DIM" "$C_RST" "$C_DIM" "$C_RST"
-      top_hosts
-    elif [ -n "$topsample" ]; then
-      printf "%s─ top ─%s  %slive per-process%s\n" "$C_DIM" "$C_RST" "$C_DIM" "$C_RST"
-      top_total="$(printf "%s\n" "$topsample" | head -n1 | cut -f1)"
-      case "$top_total" in ''|*[!0-9]*) top_total=0;; esac
-      printf "%s\n" "$topsample" | while IFS=$'\t' read -r stotal sname sin sout; do
-        if [ "$top_total" -gt 0 ]; then pct=$(( stotal * 100 / top_total )); else pct=0; fi
-        printf "  %s%-16.16s%s  %s↓%s %s%s%s  %s↑%s %s%s%s  %s%s%s\n" \
-          "$C_BLD" "$sname" "$C_RST" \
-          "$C_DIM" "$C_RST" "$C_GRN" "$(human_rate "${sin:-0}")" "$C_RST" \
-          "$C_DIM" "$C_RST" "$C_GRN" "$(human_rate "${sout:-0}")" "$C_RST" \
-          "$C_DIM" "$(bar "$pct" 10)" "$C_RST"
-      done
-    elif [ "$topstate" = "sampling" ]; then
-      printf "%s─ top ─%s  %s(sampling…)%s\n" "$C_DIM" "$C_RST" "$C_DIM" "$C_RST"
-    else
-      printf "%s─ top ─%s  %s(idle — no process traffic this interval)%s\n" "$C_DIM" "$C_RST" "$C_DIM" "$C_RST"
-    fi
+    case "$topstate" in
+      fallback)
+        tsec "TOP BY CONNECTIONS"
+        trowt "${C_DIM}(no per-process counters on this OS)${C_RST}" "(no per-process counters on this OS)"
+        local -a ftoks=()
+        while IFS=$'\t' read -r hc ha; do
+          [ -z "${ha:-}" ] && continue
+          ftoks[${#ftoks[@]}]="${C_DIM}· ${hc}x ${ha}${C_RST}"
+          ftoks[${#ftoks[@]}]="· ${hc}x ${ha}"
+          ftoks[${#ftoks[@]}]=""
+          ftoks[${#ftoks[@]}]="$SEP"
+        done < <(host_pairs)
+        if [ ${#ftoks[@]} -gt 0 ]; then
+          unset "ftoks[${#ftoks[@]}-1]"
+          trowt "${ftoks[@]}"
+        fi
+        ;;
+      live)
+        tsec "TOP PROCESSES"
+        trowt "${C_DIM}$(printf '%-*s' "$cn" "PROCESS")${C_RST}" "$(printf '%-*s' "$cn" "PROCESS")" "" " " \
+              "${C_DIM}$(printf '%-*s' "$cd" "DOWN")${C_RST}" "$(printf '%-*s' "$cd" "DOWN")" "" " " \
+              "${C_DIM}$(printf '%-*s' "$cu" "UP")${C_RST}" "$(printf '%-*s' "$cu" "UP")" "" " " \
+              "${C_DIM}$(printf '%-*s' "$cb" "SHARE")${C_RST}" "$(printf '%-*s' "$cb" "SHARE")"
+        top_total="$(printf "%s\n" "$topsample" | head -n1 | cut -f1)"
+        case "$top_total" in ''|*[!0-9]*) top_total=0;; esac
+        while IFS=$'\t' read -r stotal sname sin sout; do
+          [ -z "${sname:-}" ] && continue
+          if [ "$top_total" -gt 0 ]; then pct=$(( stotal * 100 / top_total )); else pct=0; fi
+          trowt "${C_BLD}$(printf '%-*s' "$cn" "${sname:0:cn}")${C_RST}" "$(printf '%-*s' "$cn" "${sname:0:cn}")" "" " " \
+                "${C_GRN}$(printf '%-*s' "$cd" "$(human_rate "${sin:-0}")")${C_RST}" "$(printf '%-*s' "$cd" "$(human_rate "${sin:-0}")")" "" " " \
+                "${C_GRN}$(printf '%-*s' "$cu" "$(human_rate "${sout:-0}")")${C_RST}" "$(printf '%-*s' "$cu" "$(human_rate "${sout:-0}")")" "" " " \
+                "${C_DIM}$(printf '%-*s' "$cb" "$(bar "$pct" "$cb")")${C_RST}" "$(printf '%-*s' "$cb" "$(bar "$pct" "$cb")")"
+        done < <(printf "%s\n" "$topsample")
+        ;;
+      sampling)
+        tsec "TOP PROCESSES"
+        trowt "${C_DIM}(sampling…)${C_RST}" "(sampling…)"
+        ;;
+      *)
+        tsec "TOP PROCESSES"
+        trowt "${C_DIM}(idle — no process traffic this interval)${C_RST}" "(idle — no process traffic this interval)"
+        ;;
+    esac
   fi
 
-  # --- ping ---
-  printf "%s─ ping ─%s   gw %s%s ms%s   1.1.1.1 %s%s ms%s   8.8.8.8 %s%s ms%s\n" \
-    "$C_DIM" "$C_RST" "$cg" "$pg" "$C_RST" "$c1" "$p1" "$C_RST" "$c8" "$p8" "$C_RST"
-  printf "%s  trend %s %s%s\n" "$C_DIM" "$(spark "$hist")" "$C_RST"
+  # ---------- ping ----------
+  tsec "PING"
+  trowt "${C_DIM}gateway${C_RST} $cg${pg} ms${C_RST}" "gateway ${pg} ms" "" "$SEP" \
+        "${C_DIM}1.1.1.1${C_RST} $c1${p1} ms${C_RST}" "1.1.1.1 ${p1} ms" "" "$SEP" \
+        "${C_DIM}8.8.8.8${C_RST} $c8${p8} ms${C_RST}" "8.8.8.8 ${p8} ms"
+  trowt "${C_DIM}trend${C_RST} $C_CYN$(spark "$hist")${C_RST}" "trend $(spark "$hist")"
 
-  # --- keys (interactive only) ---
+  # ---------- footer ----------
   if [ "$INTERACTIVE" = "1" ]; then
-    printf "%s[t] speed test   [q] quit%s\n" "$C_DIM" "$C_RST"
+    tbot "[t] speed test   [q] quit"
+  else
+    tbot ""
   fi
 }
 
