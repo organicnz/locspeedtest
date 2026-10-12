@@ -6,31 +6,33 @@ Live local-network connections + speed monitor in a single Bash file. No install
 
 ```bash
 # Option A — process substitution (recommended: keeps [t]/[q] keys working)
-bash <(curl -fsSL https://raw.githubusercontent.com/organicnz/locspeedtest/v1.4.0/locspeed.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/organicnz/locspeedtest/HEAD/locspeed.sh)
 
 # Option B — pipe (non-interactive, keys disabled, use flags)
-curl -fsSL https://raw.githubusercontent.com/organicnz/locspeedtest/v1.4.0/locspeed.sh | bash -s -- --once
+curl -fsSL https://raw.githubusercontent.com/organicnz/locspeedtest/HEAD/locspeed.sh | bash -s -- --once
 
 # Option C — clone
 git clone https://github.com/organicnz/locspeedtest.git && cd locspeedtest && bash locspeed.sh
 ```
 
-> Replace `USER` with the GitHub owner. Pin a tag (e.g. `v1.4.0`), never `main`, for anything you share.
+> The URLs use `HEAD` so they always track the latest commit on the default branch — no tag to bump, nothing to update. If you want a reproducible snapshot (same bytes every run), swap `HEAD` for a tag, e.g. `.../v1.4.0/locspeed.sh`.
 
 ### Verify before running (recommended for `curl | bash`)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/organicnz/locspeedtest/v1.4.0/locspeed.sh -o locspeed.sh
-shasum -a 256 locspeed.sh   # compare with SHA256SUMS in Releases
+curl -fsSL https://raw.githubusercontent.com/organicnz/locspeedtest/HEAD/locspeed.sh -o locspeed.sh
+shasum -a 256 locspeed.sh   # compare with a pinned tag if you want a stable hash
 bash locspeed.sh --once
 ```
+
+Note: with `HEAD`, the file changes whenever the repo does, so its hash changes too — `SHA256SUMS` in the repo is a snapshot of whatever commit it was generated on. If you need to verify an exact, unchanging artifact, fetch by tag (`.../v1.4.0/locspeed.sh`) and compare against the hash recorded on that tag.
 
 ## What it shows
 
 Output is a bordered table that fits your terminal width (default 80, min 56) with automatic wrapping — nothing is ever truncated or misaligned:
 
 ```
-┌─ locspeed v1.4.0  │  iface en0  │  11:34:23 ───────────────────────────────┐
+┌─ locspeed  │  iface en0  │  11:34:23 ───────────────────────────────┐
 ├─ SPEED ────────────────────────────────────────────────────────────────────┤
 │ down 469 Kb/s    up 286 Kb/s                                               │
 ├─ LOCAL ────────────────────────────────────────────────────────────────────┤
