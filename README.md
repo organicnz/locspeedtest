@@ -6,21 +6,21 @@ Live local-network connections + speed monitor in a single Bash file. No install
 
 ```bash
 # Option A — process substitution (recommended: keeps [t]/[q] keys working)
-bash <(curl -fsSL https://raw.githubusercontent.com/organicnz/locspeedtest/v1.1.0/locspeed.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/organicnz/locspeedtest/v1.2.0/locspeed.sh)
 
 # Option B — pipe (non-interactive, keys disabled, use flags)
-curl -fsSL https://raw.githubusercontent.com/organicnz/locspeedtest/v1.1.0/locspeed.sh | bash -s -- --once
+curl -fsSL https://raw.githubusercontent.com/organicnz/locspeedtest/v1.2.0/locspeed.sh | bash -s -- --once
 
 # Option C — clone
 git clone https://github.com/organicnz/locspeedtest.git && cd locspeedtest && bash locspeed.sh
 ```
 
-> Replace `USER` with the GitHub owner. Pin a tag (e.g. `v1.1.0`), never `main`, for anything you share.
+> Replace `USER` with the GitHub owner. Pin a tag (e.g. `v1.2.0`), never `main`, for anything you share.
 
 ### Verify before running (recommended for `curl | bash`)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/organicnz/locspeedtest/v1.1.0/locspeed.sh -o locspeed.sh
+curl -fsSL https://raw.githubusercontent.com/organicnz/locspeedtest/v1.2.0/locspeed.sh -o locspeed.sh
 shasum -a 256 locspeed.sh   # compare with SHA256SUMS in Releases
 bash locspeed.sh --once
 ```
