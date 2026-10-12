@@ -334,14 +334,26 @@ snapshot_human() { # args: iface lip gw dns wifi pubip counts down up ping_gw pi
   local topsample="${18:-}" topstate="${19:-live}"
   local top_total=0 pct=0 stotal="" sname="" sin="" sout=""
   local cg c1 c8 now
+
   cg="$(color_for_ms "$pg")"; c1="$(color_for_ms "$p1")"; c8="$(color_for_ms "$p8")"
   now="$(date '+%H:%M:%S' 2>/dev/null || echo "??:??:??")"
 
+  # --- speed (moved to top) ---
+  printf "%s─ speed ─%s  down %s%s%s  up %s%s%s" \
+    "$C_DIM" "$C_RST" "$C_GRN" "$down" "$C_RST" "$C_GRN" "$up" "$C_RST"
+  if [ -n "$lt" ] && [ "$lt" != "—" ]; then
+    printf "  full-test %s%s Mb/s%s" "$C_BLD" "$lt" "$C_RST"
+  fi
+  printf "\n"
+
+  # --- version + iface ---
   printf "%s%s locspeed v%s %s│%s %s %s│%s iface %s%s\n" \
     "$C_BLD" "$C_CYN" "$VERSION" "$C_DIM" "$C_RST$C_DIM" "$now" "$C_DIM" "$C_RST$C_BLD" "$ifx" "$C_RST"
   printf "%s─ local ─%s  ip %s%s%s  gw %s  dns %s  wifi %s%s%s\n" \
     "$C_DIM" "$C_RST" "$C_BLD" "$lip" "$C_RST" "$gw" "$dns" "$C_DIM" "$wifi" "$C_RST"
   printf "%s─ public ─%s  %s%s%s\n" "$C_DIM" "$C_RST" "$C_BLU" "$pub" "$C_RST"
+
+  # --- conns ---
   printf "%s─ conns ─%s  total %s%d%s  estab %s%d%s  wait %d  listen %d\n" \
     "$C_DIM" "$C_RST" "$C_BLD" "$t" "$C_RST" "$C_GRN" "$e" "$C_RST" "$w" "$l"
   printf "%s  top talkers:%s\n" "$C_DIM" "$C_RST"
@@ -368,15 +380,13 @@ snapshot_human() { # args: iface lip gw dns wifi pubip counts down up ping_gw pi
       printf "%s─ top ─%s  %s(idle — no process traffic this interval)%s\n" "$C_DIM" "$C_RST" "$C_DIM" "$C_RST"
     fi
   fi
+
+  # --- ping ---
   printf "%s─ ping ─%s   gw %s%s ms%s   1.1.1.1 %s%s ms%s   8.8.8.8 %s%s ms%s\n" \
     "$C_DIM" "$C_RST" "$cg" "$pg" "$C_RST" "$c1" "$p1" "$C_RST" "$c8" "$p8" "$C_RST"
   printf "%s  trend %s %s%s\n" "$C_DIM" "$(spark "$hist")" "$C_RST"
-  printf "%s─ speed ─%s  down %s%s%s  up %s%s%s" \
-    "$C_DIM" "$C_RST" "$C_GRN" "$down" "$C_RST" "$C_GRN" "$up" "$C_RST"
-  if [ -n "$lt" ] && [ "$lt" != "—" ]; then
-    printf "  full-test %s%s Mb/s%s" "$C_BLD" "$lt" "$C_RST"
-  fi
-  printf "\n"
+
+  # --- keys (interactive only) ---
   if [ "$INTERACTIVE" = "1" ]; then
     printf "%s[t] speed test   [q] quit%s\n" "$C_DIM" "$C_RST"
   fi
