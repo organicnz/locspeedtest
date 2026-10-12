@@ -19,6 +19,9 @@ ONCE=0
 JSON=0
 NO_COLOR=0
 NO_PUBIP=0
+NO_TOP=0
+TOP_PREV="${TMPDIR:-/tmp}/.locspeed_topprev.$$"
+TOP_CUR="${TMPDIR:-/tmp}/.locspeed_topcur.$$"
 IFACE=""
 TEST_BYTES=25000000   # 25 MB Cloudflare download probe
 PUBIP_TTL=300         # seconds to cache public IP in /tmp
@@ -40,6 +43,7 @@ Options:
   --json         one JSON snapshot on stdout, exit (no colors, no loop)
   --no-color     disable ANSI colors (also honors NO_COLOR=1)
   --no-pubip     skip public-IP lookup (faster, fully offline-safe)
+  --no-top       hide the live per-process top section
   -h, --help     this help
   -v, --version  version
 
@@ -57,6 +61,7 @@ while [ $# -gt 0 ]; do
     --json) JSON=1; shift ;;
     --no-color) NO_COLOR=1; shift ;;
     --no-pubip) NO_PUBIP=1; shift ;;
+    --no-top) NO_TOP=1; shift ;;
     -h|--help) usage; exit 0 ;;
     -v|--version) echo "locspeed v${VERSION}"; exit 0 ;;
     --) shift; break ;;
@@ -223,6 +228,30 @@ top_hosts() {
     | awk '{printf "      %4dx  %s\n", $1, $2}' || true
 }
 
+# Live per-process traffic rates via macOS nettop (cumulative counters diffed
+# across calls). Prints tab-separated "total name in_rps out_rps" top-5 lines.
+# Prints nothing on the first call (baseline only) or when idle. Always 0.
+sample_top() { # sample_top <interval_sec>
+  local dt="$1"
+  case "$dt" in ''|*[!0-9]*) dt=1;; esac
+  [ "$dt" -ge 1 ] || dt=1
+  [ "$OS" = "Darwin" ] || return 0
+  has_cmd nettop || return 0
+  nettop -P -L 1 2>/dev/null | awk -F, '
+    $1=="time" {next}
+    $2!="" && ($5+0>0 || $6+0>0) {n=$2; sub(/\.[0-9]+$/,"",n); i[n]+=$5; o[n]+=$6}
+    END{for(n in i) printf "%s\t%d\t%d\n", n, i[n], o[n]}' | sort > "$TOP_CUR" 2>/dev/null || return 0
+  if [ -f "$TOP_PREV" ]; then
+    awk -F'\t' -v dt="$dt" '
+      NR==FNR{pi[$1]=$2; po[$1]=$3; next}
+      {di=$2-(pi[$1]+0); ou=$3-(po[$1]+0); if(di<0)di=0; if(ou<0)ou=0; t=di+ou;
+       if(t>0) printf "%d\t%s\t%d\t%d\n", t, $1, int(di/dt), int(ou/dt)}' \
+      "$TOP_PREV" "$TOP_CUR" 2>/dev/null | sort -rn | head -5
+  fi
+  mv -f "$TOP_CUR" "$TOP_PREV" 2>/dev/null || true
+  return 0
+}
+
 ping_ms() {
   local host="$1" out ms
   if [ "$OS" = "Darwin" ]; then
@@ -298,10 +327,12 @@ speed_test_mbps() {
 }
 
 # ---------------------------------------------------------------- snapshot
-snapshot_human() { # args: iface lip gw dns wifi pubip counts down up ping_gw ping_11 ping_88 hist lasttest
+snapshot_human() { # args: iface lip gw dns wifi pubip counts down up ping_gw ping_11 ping_88 hist lasttest topsample topstate
   local ifx="$1" lip="$2" gw="$3" dns="$4" wifi="$5" pub="$6"
   local t="$7" e="$8" w="$9" l="${10}" down="${11}" up="${12}"
   local pg="${13}" p1="${14}" p8="${15}" hist="${16}" lt="${17}"
+  local topsample="${18:-}" topstate="${19:-live}"
+  local top_total=0 pct=0 stotal="" sname="" sin="" sout=""
   local cg c1 c8 now
   cg="$(color_for_ms "$pg")"; c1="$(color_for_ms "$p1")"; c8="$(color_for_ms "$p8")"
   now="$(date '+%H:%M:%S' 2>/dev/null || echo "??:??:??")"
@@ -315,6 +346,28 @@ snapshot_human() { # args: iface lip gw dns wifi pubip counts down up ping_gw pi
     "$C_DIM" "$C_RST" "$C_BLD" "$t" "$C_RST" "$C_GRN" "$e" "$C_RST" "$w" "$l"
   printf "%s  top talkers:%s\n" "$C_DIM" "$C_RST"
   top_hosts
+  if [ "$NO_TOP" = "0" ]; then
+    if [ "$topstate" = "fallback" ]; then
+      printf "%s─ top ─%s  %sby connections (no per-process counters on this OS)%s\n" "$C_DIM" "$C_RST" "$C_DIM" "$C_RST"
+      top_hosts
+    elif [ -n "$topsample" ]; then
+      printf "%s─ top ─%s  %slive per-process%s\n" "$C_DIM" "$C_RST" "$C_DIM" "$C_RST"
+      top_total="$(printf "%s\n" "$topsample" | head -n1 | cut -f1)"
+      case "$top_total" in ''|*[!0-9]*) top_total=0;; esac
+      printf "%s\n" "$topsample" | while IFS=$'\t' read -r stotal sname sin sout; do
+        if [ "$top_total" -gt 0 ]; then pct=$(( stotal * 100 / top_total )); else pct=0; fi
+        printf "  %s%-16.16s%s  %s↓%s %s%s%s  %s↑%s %s%s%s  %s%s%s\n" \
+          "$C_BLD" "$sname" "$C_RST" \
+          "$C_DIM" "$C_RST" "$C_GRN" "$(human_rate "${sin:-0}")" "$C_RST" \
+          "$C_DIM" "$C_RST" "$C_GRN" "$(human_rate "${sout:-0}")" "$C_RST" \
+          "$C_DIM" "$(bar "$pct" 10)" "$C_RST"
+      done
+    elif [ "$topstate" = "sampling" ]; then
+      printf "%s─ top ─%s  %s(sampling…)%s\n" "$C_DIM" "$C_RST" "$C_DIM" "$C_RST"
+    else
+      printf "%s─ top ─%s  %s(idle — no process traffic this interval)%s\n" "$C_DIM" "$C_RST" "$C_DIM" "$C_RST"
+    fi
+  fi
   printf "%s─ ping ─%s   gw %s%s ms%s   1.1.1.1 %s%s ms%s   8.8.8.8 %s%s ms%s\n" \
     "$C_DIM" "$C_RST" "$cg" "$pg" "$C_RST" "$c1" "$p1" "$C_RST" "$c8" "$p8" "$C_RST"
   printf "%s  trend %s %s%s\n" "$C_DIM" "$(spark "$hist")" "$C_RST"
@@ -340,6 +393,7 @@ main() {
   [ -z "$IFACE" ] && { echo "no default route found (offline?)" >&2; exit 1; }
 
   local gw dns wifi pub lip
+  local TOP_SAMPLE="" TOP_STATE="live"
   gw="$(gateway)"
   dns="$(dns_server)"
   wifi="$(ssid)"
@@ -358,22 +412,35 @@ main() {
     b="$(iface_bytes "$IFACE")"
     # shellcheck disable=SC2086
     set -- $b; r0=${1:-0}; t0=${2:-0}
+    if [ "$ONCE" = "1" ] && [ "$NO_TOP" = "0" ]; then
+      if [ "$OS" = "Darwin" ] && has_cmd nettop; then
+        rm -f "$TOP_PREV" "$TOP_CUR" 2>/dev/null || true
+        sample_top "$INTERVAL" >/dev/null
+      else
+        TOP_STATE="fallback"
+      fi
+    fi
     sleep 1
     b="$(iface_bytes "$IFACE")"
     # shellcheck disable=SC2086
     set -- $b; r1=${1:-0}; t1=${2:-0}
     down="$(human_rate $((r1 - r0)))"; up="$(human_rate $((t1 - t0)))"
     pg="$(ping_ms "$gw")"; p1="$(ping_ms 1.1.1.1)"; p8="$(ping_ms 8.8.8.8)"
+    if [ "$ONCE" = "1" ] && [ "$NO_TOP" = "0" ] && [ "$TOP_STATE" = "live" ]; then
+      TOP_SAMPLE="$(sample_top "$INTERVAL")"
+    fi
     if [ "$JSON" = "1" ]; then
       snapshot_json "$IFACE" "$lip" "$gw" "$dns" "$wifi" "$pub" "$ct" "$ce" "$cw" "$cl" "$pg" "$p1" "$p8" "$down" "$up" "—"
     else
-      snapshot_human "$IFACE" "$lip" "$gw" "$dns" "$wifi" "$pub" "$ct" "$ce" "$cw" "$cl" "$down" "$up" "$pg" "$p1" "$p8" "$pg $p1 $p8" "—"
+      snapshot_human "$IFACE" "$lip" "$gw" "$dns" "$wifi" "$pub" "$ct" "$ce" "$cw" "$cl" "$down" "$up" "$pg" "$p1" "$p8" "$pg $p1 $p8" "—" "$TOP_SAMPLE" "$TOP_STATE"
     fi
+    rm -f "$TOP_PREV" "$TOP_CUR" 2>/dev/null || true
     return 0
   fi
 
   # live loop
-  trap 'printf "\033[?25h\n"; exit 0' INT TERM
+  trap 'rm -f "$TOP_PREV" "$TOP_CUR" 2>/dev/null; printf "\033[?25h\n"; exit 0' INT TERM
+  rm -f "$TOP_PREV" "$TOP_CUR" 2>/dev/null || true
   [ "$INTERACTIVE" = "1" ] && printf "\033[?25l"
   local HIST="" LAST_TEST="—" key r0 t0 r1 t1 down up c pg p1 p8 b
   local ct ce cw cl
@@ -395,8 +462,16 @@ main() {
     up="$(human_rate $(((t1 - t0) / INTERVAL)))"
     r0=$r1; t0=$t1
     pg="$(ping_ms "$gw")"; p1="$(ping_ms 1.1.1.1)"; p8="$(ping_ms 8.8.8.8)"
+    if [ "$NO_TOP" = "0" ]; then
+      if [ "$OS" = "Darwin" ] && has_cmd nettop; then
+        if [ -f "$TOP_PREV" ]; then TOP_STATE="live"; else TOP_STATE="sampling"; fi
+        TOP_SAMPLE="$(sample_top "$INTERVAL")"
+      else
+        TOP_STATE="fallback"; TOP_SAMPLE=""
+      fi
+    fi
     push_hist HIST "$p1" 30
-    snapshot_human "$IFACE" "$lip" "$gw" "$dns" "$wifi" "$pub" "$ct" "$ce" "$cw" "$cl" "$down" "$up" "$pg" "$p1" "$p8" "$HIST" "$LAST_TEST"
+    snapshot_human "$IFACE" "$lip" "$gw" "$dns" "$wifi" "$pub" "$ct" "$ce" "$cw" "$cl" "$down" "$up" "$pg" "$p1" "$p8" "$HIST" "$LAST_TEST" "$TOP_SAMPLE" "$TOP_STATE"
     # refresh slow-changing fields occasionally (every ~30s)
     if [ $((SECONDS / 30 % 2)) -eq 0 ]; then
       lip="$(local_ip "$IFACE")"; pub="$(public_ip)"
